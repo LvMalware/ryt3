@@ -10,7 +10,6 @@ use Time::HiRes 'ualarm';
 
 my $torrc = '/etc/tor/torrc';
 my $virtnet = '10.192.0.0/10';
-my $virtnet6 = '[FE80::]/10';
 my $transport = 9040;
 my $dnsport = 5353;
 
@@ -42,16 +41,6 @@ sub get_subnets {
         my $bin = join '', map { sprintf "%b", $_ } split /\./, $mask;
         $mask = length($bin =~ s/0+$//r);
         push @nets, "$ip/$mask";
-    }
-    @nets
-}
-
-sub get_subnets6 {
-    my @nets = `ip a s` =~ /inet6 +([^ ]+\/\d+)/ig;
-    return @nets if @nets > 0;
-    while (`ifconfig` =~ /inet6 +([^ ]+) +prefixlen +([^ ]+)/ig) {
-        my ($ip, $mask) = ($1, $2);
-        push @nets, "$ip/$mask"
     }
     @nets
 }
@@ -122,11 +111,6 @@ CONFIG
     system("iptables -A OUTPUT -m state --state INVALID -j DROP");
     system("iptables -A OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,FIN ACK,FIN -j DROP");
     system("iptables -A OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,RST ACK,RST -j DROP");
-
-    # block udp, icmp and igmp packets
-    system("iptables -t filter -A OUTPUT -p udp -j REJECT");
-    system("iptables -t filter -A OUTPUT -p icmp -j REJECT");
-    system("iptables -t filter -A OUTPUT -p igmp -j REJECT");
 
     # restart tor daemon
     system("service tor restart > /dev/null");
