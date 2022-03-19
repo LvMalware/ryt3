@@ -1,16 +1,19 @@
 #!/usr/bin/env perl
-#
+
 use strict;
 use warnings;
 use HTTP::Tiny;
 use File::Copy;
 use Getopt::Long;
 use File::Basename;
+use IO::Socket::INET;
 use Time::HiRes 'ualarm';
+use Digest::SHA 'sha256_hex';
 
 my $torrc = '/etc/tor/torrc';
 my $virtnet = '10.192.0.0/10';
 my $transport = 9040;
+my $contrport = 9051;
 my $dnsport = 5353;
 
 sub help {
@@ -22,6 +25,7 @@ Usage: $prog [-h | --help] command
 Commands:
     start       Start the transparent proxy and set up everything
     stop        Stop the proxy and restores normal network behaviour
+    new         Get a new Tor circuit
     restart     Restart the proxy
     install     Install necessary packages
 
@@ -66,12 +70,31 @@ sub start {
     my $tor_uid = tor_uid();
     # get local subnets for which Tor should not be used
     my @subnets = get_subnets();
+    # generte a random password for control port access
+    my $password = sha256_hex(join '', map { rand 256 } 1 .. 32);
+    # hash the password
+    my ($hashed) = `tor --hash-password "$password"` =~ /(16:[a-f\d]+)/i;
     # config lines to add to torrc
     my $config =<<CONFIG;
 VirtualAddrNetwork $virtnet
 AutomapHostsOnResolve 1
 TransPort $transport IsolateClientAddr IsolateClientProtocol IsolateDestAddr IsolateDestPort
+ControlPort 127.0.0.1:$contrport
 DNSPort $dnsport
+
+TestSocks 1
+WarnPlaintextPorts 21,23,109,110,143,80
+ClientRejectInternalAddresses 1
+
+NewCircuitPeriod 40
+MaxCircuitDirtiness 600
+MaxClientCircuitsPending 48
+
+UseEntryGuards 1
+EnforceDistinctSubnets 1
+
+HashedControlPassword $hashed
+# $password
 CONFIG
     # add config lines
     open(my $fh, ">>$torrc") || return 0;
@@ -115,6 +138,21 @@ CONFIG
     # restart tor daemon
     system("service tor restart > /dev/null");
     1
+}
+
+sub new_identity {
+    chomp(my $password = `tail -n 1 $torrc`);
+    $password = (split(" ", $password))[1] || return;
+    print "[+] Changing Tor identity ...\n";
+    my $sock = IO::Socket::INET->new(
+        PeerAddr => '127.0.0.1',
+        PeerPort => $contrport,
+        Proto    => 'tcp',
+    ) || die "[!] Can't connect to control port";
+    print $sock "authenticate \"$password\"\n";
+    print $sock "signal newnym\n";
+    print $sock "quit\n";
+    1;
 }
 
 sub stop {
@@ -198,6 +236,8 @@ sub main {
         return install();
     } elsif ($command eq "status") {
         return status();
+    } elsif ($command eq "new") {
+        new_identity();
     } else {
         return help();
     }
